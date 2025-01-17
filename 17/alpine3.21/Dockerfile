@@ -133,7 +133,7 @@ RUN set -eux; \
 #		--enable-debug \
 		--disable-rpath \
 		--with-uuid=e2fs \
-		--with-pgport=5432 \
+		--with-pgport=5433 \
 		--with-system-tzdata=/usr/share/zoneinfo \
 		--prefix=/usr/local \
 		--with-includes=/usr/local/include \
