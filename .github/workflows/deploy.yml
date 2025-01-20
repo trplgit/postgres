@@ -1,0 +1,100 @@
+name: CI/CD Build and Deploy PostgreSQL Docker Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy (Development/Production)'
+        required: true
+        default: 'development'
+
+jobs:
+  build-push-deploy-postgres:
+    name: Build, Push, and Deploy PostgreSQL Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout Postgres Docker repository
+      - name: Checkout Postgres Repository
+        uses: actions/checkout@v3
+        with:
+          repository: trplgit/postgres
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: postgres
+
+      # Set up Docker buildx
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v2
+
+      # Log in to Azure Container Registry
+      - name: Log in to Azure Container Registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ vars.ACR_NAME }}.azurecr.io
+          username: ${{ vars.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      # Build and Push PostgreSQL Docker Image
+      - name: Build and Push PostgreSQL Docker Image
+        run: |
+          docker build -f ./postgres/17/alpine3.21/Dockerfile -t ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.environment }}/trpl-postgres-docker:v17 ./postgres/17/alpine3.21
+          docker push ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.environment }}/trpl-postgres-docker:v17
+
+      # Install OpenVPN
+      - name: Install OpenVPN
+        run: sudo apt-get install -y openvpn
+
+      # Prepare VPN files
+      - name: Prepare VPN Files
+        run: |
+          echo "${{ secrets.VPN_PKCS12_FILE }}" | base64 -d > TRPL-FW-TCP-1194-ci-cd-automation.p12
+          echo "${{ secrets.VPN_TLS_KEY_FILE }}" | base64 -d > TRPL-FW-TCP-1194-ci-cd-automation-tls.key
+
+      # Connect to VPN
+      - name: Connect to VPN
+        run: |
+          echo "${{ secrets.VPN_CONFIG_FILE }}" > vpn-config.ovpn
+          echo -e "${{ vars.VPN_USERNAME }}\n${{ secrets.VPN_PASSWORD }}" > vpn-credentials.txt
+          sudo openvpn --config vpn-config.ovpn --auth-user-pass vpn-credentials.txt --daemon
+
+      # Wait for VPN connection
+      - name: Wait for VPN Connection
+        run: sleep 15
+
+      # Verify VPN connection
+      - name: Verify VPN Connection
+        run: |
+          ifconfig | grep tun || (echo "VPN connection failed" && exit 1)
+
+      # Add user to Docker group
+      - name: Add user to Docker group
+        run: |
+          sudo usermod -aG docker $USER
+          newgrp docker || true
+
+      # Create Docker network if not exists
+      - name: Create Docker Network if not exists
+        run: |
+          echo "${{ secrets.LINUX_VM_PASSWORD_DEVELOPMENT }}" | sudo -S docker network create odoo-postgres-network || echo "Network already exists"
+
+      # Deploy PostgreSQL Docker container to VM
+      - name: Deploy PostgreSQL Docker Container to VM
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ vars.LINUX_VM_HOST_DEVELOPMENT }}
+          username: ${{ vars.LINUX_VM_USERNAME_DEVELOPMENT }}
+          password: ${{ secrets.LINUX_VM_PASSWORD_DEVELOPMENT }}
+          port: 22
+          script: |
+            echo "${{ secrets.LINUX_VM_PASSWORD_DEVELOPMENT }}" | sudo -S docker login ${{ vars.ACR_NAME }}.azurecr.io -u ${{ vars.ACR_USERNAME }} -p ${{ secrets.ACR_PASSWORD }}
+            echo "${{ secrets.LINUX_VM_PASSWORD_DEVELOPMENT }}" | sudo -S docker pull ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.environment }}/trpl-postgres-docker:v17
+            echo "${{ secrets.LINUX_VM_PASSWORD_DEVELOPMENT }}" | sudo -S docker stop postgres-container || true
+            echo "${{ secrets.LINUX_VM_PASSWORD_DEVELOPMENT }}" | sudo -S docker rm postgres-container || true
+
+            # Run PostgreSQL container
+            echo "${{ secrets.LINUX_VM_PASSWORD_DEVELOPMENT }}" | sudo -S docker run -d --restart always --name postgres-container --network=odoo-postgres-network -e POSTGRES_PASSWORD=mysecretpassword -p 5433:5433 ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.environment }}/trpl-postgres-docker:v17
+
+      # Cleanup VPN credentials
+      - name: Cleanup VPN Credentials
+        run: |
+          rm -f vpn-config.ovpn vpn-credentials.txt
