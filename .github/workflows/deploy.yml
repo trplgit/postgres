@@ -39,7 +39,7 @@ jobs:
 
       - name: Build and Push Postgres Docker Image
         run: |
-          docker build -f ./postgres/17/alpine3.21/Dockerfile -t ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.environment }}/trpl-postgres-docker:v17 ./postgres/17/alpine3.21
+          docker build -f ./17/alpine3.21/Dockerfile -t ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.environment }}/trpl-postgres-docker:v17 ./17/alpine3.21
           docker push ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.environment }}/trpl-postgres-docker:v17
 
   deploy:
